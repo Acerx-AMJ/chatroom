@@ -5,7 +5,7 @@ int main() {
    sf::UdpSocket socket;
    if (socket.bind(sf::Socket::AnyPort) != sf::Socket::Status::Done) {
       printf("Could not bind to port %d!\n", socket.getLocalPort());
-      return EXIT_FAILURE;
+      exit(EXIT_FAILURE);
    }
 
    printf("Server listening on %s:%d...\n", sf::IpAddress::getLocalAddress().toString().c_str(), socket.getLocalPort());
@@ -13,7 +13,7 @@ int main() {
 
    if (listener.listen(socket.getLocalPort()) != sf::Socket::Status::Done) {
       printf("Could not connect listener!\n");
-      return EXIT_FAILURE;
+      exit(EXIT_FAILURE);
    }
 
    sf::SocketSelector selector;
@@ -21,56 +21,57 @@ int main() {
 
    std::vector<std::unique_ptr<sf::TcpSocket>> clients;
 
-   while (true)
-   {
-      if (selector.wait())
-      {
-         if (selector.isReady(listener))
-         {
-            auto socket = std::make_unique<sf::TcpSocket>();
-            if (listener.accept(*socket) != sf::Socket::Status::Done)
-               throw std::runtime_error("Could not accept socket!");
-
-            selector.add(*socket);
-            clients.push_back(std::move(socket));
+   while (true) {
+      if (!selector.wait()) {
+         continue;
+      }
+   
+      if (selector.isReady(listener)) {
+         auto socket = std::make_unique<sf::TcpSocket>();
+         if (listener.accept(*socket) != sf::Socket::Status::Done) {
+            printf("Could not accept socket!\n");
+            exit(EXIT_FAILURE);
          }
 
-         for (auto it = clients.begin(); it != clients.end();)
-         {
-            if (selector.isReady(**it))
-            {
-               sf::Packet packet;
+         selector.add(*socket);
+         clients.push_back(std::move(socket));
+      }
 
-               if ((*it)->receive(packet) != sf::Socket::Status::Done)
-               {
-                  selector.remove(**it);
-                  it = clients.erase(it);
-                  continue;
-               }
+      for (auto it = clients.begin(); it != clients.end();) {
+         if (!selector.isReady(**it)) {
+            it = std::next(it);
+            continue;
+         }
+         sf::Packet packet;
 
-               std::string data;
-               packet >> data;
-               printf("%s\n", data.c_str());
+         if ((*it)->receive(packet) != sf::Socket::Status::Done) {
+            selector.remove(**it);
+            it = clients.erase(it);
+            continue;
+         }
 
-               sf::Packet echoPacket;
-               echoPacket << data;
+         std::string data;
+         packet >> data;
+         printf("%s\n", data.c_str());
 
-               for (auto& socket : clients)
-               {
-                  if (socket.get() == it->get())
-                     continue;
-                  
-                  if (socket->send(echoPacket) != sf::Socket::Status::Done)
-                     printf("Failed to echo user's message!\n");
-               }
+         sf::Packet echoPacket;
+         echoPacket << data;
+
+         for (std::unique_ptr<sf::TcpSocket> &socket: clients) {
+            if (socket.get() == it->get()) {
+               continue;
             }
-            ++it;
+
+            if (socket->send(echoPacket) != sf::Socket::Status::Done) {
+               printf("Failed to echo user's message!\n");
+            }
          }
+         it = std::next(it);
       }
    }
 
    printf("Server disconnected.\n");
-   for (auto& socket : clients) {
+   for (std::unique_ptr<sf::TcpSocket> &socket: clients) {
       socket->disconnect();
    }
 }
