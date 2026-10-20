@@ -1,18 +1,20 @@
 #include <SFML/Network.hpp>
-#include "io.hpp"
 #include <memory>
 
-using Port = int;
+int main() {
+   sf::UdpSocket socket;
+   if (socket.bind(sf::Socket::AnyPort) != sf::Socket::Status::Done) {
+      printf("Could not bind to port %d!\n", socket.getLocalPort());
+      return EXIT_FAILURE;
+   }
 
-int main()
-{
-   Port port = get_integer_input("Input server port: ");
-
+   printf("Server listening on %s:%d...\n", sf::IpAddress::getLocalAddress().toString().c_str(), socket.getLocalPort());
    sf::TcpListener listener;
-   if (listener.listen(port, sf::IpAddress::Any) != sf::Socket::Status::Done)
-      throw std::runtime_error("Could not connect to the given port!");
 
-   std::cout << "Waiting for clients to connect...\n";
+   if (listener.listen(socket.getLocalPort()) != sf::Socket::Status::Done) {
+      printf("Could not connect listener!\n");
+      return EXIT_FAILURE;
+   }
 
    sf::SocketSelector selector;
    selector.add(listener);
@@ -48,7 +50,7 @@ int main()
 
                std::string data;
                packet >> data;
-               std::cout << data << std::endl;
+               printf("%s\n", data.c_str());
 
                sf::Packet echoPacket;
                echoPacket << data;
@@ -59,14 +61,14 @@ int main()
                      continue;
                   
                   if (socket->send(echoPacket) != sf::Socket::Status::Done)
-                     std::cout << "Failed to echo user's message!" << std::endl; 
+                     printf("Failed to echo user's message!\n");
                }
             }
             ++it;
          }
       }
    }
-   std::cout << "Server disconnected." << std::endl;
+   printf("Server disconnected.\n");
 
    for (auto& socket : clients)
       socket->disconnect();
