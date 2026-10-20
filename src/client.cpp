@@ -4,52 +4,87 @@
 #include <thread>
 #include <iostream>
 
-inline constexpr size_t color_count = 16u;
-inline constexpr const char* res = "\033[0m";
-inline constexpr const char* colors[color_count] = {
-   "\033[38;2;255;128;255m", "\033[38;2;255;128;0m",   "\033[38;2;255;255;0m",
-   "\033[38;2;128;255;0m",   "\033[38;2;0;255;0m",     "\033[38;2;0;255;255m",
-   "\033[38;2;0;0;255m",     "\033[38;2;128;0;255m",   "\033[38;2;139;69;19m",
-   "\033[38;2;84;57;44m",    "\033[38;2;0;0;0m",       "\033[38;2;64;64;64m",
-   "\033[38;2;128;128;128m", "\033[38;2;192;192;192m", "\033[38;2;255;255;255m"
+constexpr size_t color_count = 15;
+constexpr const char* res = "\e[0m";
+constexpr const char* colors[color_count] = {
+   "\e[38;2;255;128;255m", "\e[38;2;255;128;0m",   "\e[38;2;255;255;0m",
+   "\e[38;2;128;255;0m",   "\e[38;2;0;255;0m",     "\e[38;2;0;255;255m",
+   "\e[38;2;0;0;255m",     "\e[38;2;128;0;255m",   "\e[38;2;139;69;19m",
+   "\e[38;2;84;57;44m",    "\e[38;2;0;0;0m",       "\e[38;2;64;64;64m",
+   "\e[38;2;128;128;128m", "\e[38;2;192;192;192m", "\e[38;2;255;255;255m"
 };
 
-inline void clear_line(int lines = 1)
-{
-   for (int i = 0; i <= lines; ++i)
-   {
-      std::cout << "\r\033[K";
-      if (i < lines)
-         std::cout << "\033[F";
-   }
+void flush() {
    std::cout << std::flush;
 }
 
-inline std::string get_valid_username(const std::string& prompt)
-{
-   std::cout << prompt;
+void clear_line(int lines = 1) {
+   for (int i = 0; i < lines; ++i) {
+      printf("\r\e[K\e[F");
+   }
+   printf("\r\e[K");
+   flush();
+}
 
+std::string get_valid_username(const char *prompt) {
+   printf("%s", prompt);
    std::string username;
    std::getline(std::cin >> std::ws, username);
 
-   while (username.size() > 24 || username.size() < 3)
-   {
+   while (username.size() > 24 || username.size() < 3) {
       clear_line();
-      std::cout << "Invalid username length, try again: ";
+      printf("Invalid username length, try again: ");
       std::getline(std::cin >> std::ws, username);
    }
    return username;
 }
 
-std::atomic<bool> quit = false;
-std::mutex mutex;
+void send_messages(sf::TcpSocket& socket, const std::string& username, std::atomic<bool> &quit, std::mutex &mutex) {
+   while (true) {
+      printf("Input your message ('exit' to exit): ");
+      std::string message;
+      std::getline(std::cin >> std::ws, message);
+      clear_line();
 
-void send_messages(sf::TcpSocket& socket, const std::string& username);
-void receive_messages(sf::TcpSocket& socket);
+      if (message == "exit") {
+         quit = true;
+         printf("Exiting...\n");
+         return;
+      }
+
+      std::string full_message = username + ": " + message;
+      printf("%s\n", full_message.c_str());
+
+      sf::Packet packet;
+      packet << full_message;
+      std::lock_guard<std::mutex> lock (mutex);
+
+      if (socket.send(packet) != sf::Socket::Status::Done) {
+         socket.disconnect();
+         printf("Could not send data!\n");
+         exit(EXIT_FAILURE);
+      }
+   }
+}
+
+void receive_messages(sf::TcpSocket& socket, std::atomic<bool> &quit, std::mutex &mutex) {
+   while (!quit) {
+      sf::Packet received;
+      std::lock_guard<std::mutex> lock (mutex);
+
+      if (socket.receive(received) == sf::Socket::Status::Done) {
+         std::string message;
+         received >> message;
+
+         clear_line(0);
+         printf("%s\n", message.c_str());
+         printf("Input your message ('exit' to exit): ");
+         flush();
+      }
+   }
+}
 
 int main() {
-   srand(time(nullptr));
-
    sf::IpAddress IPAddress;
    unsigned short port = 0;
 
@@ -68,93 +103,44 @@ int main() {
    std::cin >> std::ws >> port;
 
    sf::TcpSocket socket;
-   if (socket.connect(IPAddress, port) != sf::Socket::Status::Done)
-      throw std::runtime_error("Could not connect to the given port!");
+   if (socket.connect(IPAddress, port) != sf::Socket::Status::Done) {
+      printf("Could not connect to %s:%u.\n", IPAddress.toString().c_str(), port);
+      exit(EXIT_FAILURE);
+   }
 
    socket.setBlocking(false);
-   std::cout << "Connected to server!\n";
+   printf("Connected to server!\n");
 
+   srand(time(nullptr));
    std::string username = get_valid_username("Please input your username: ");
    username = colors[rand() % color_count] + username + res;
 
    sf::Packet startingPacket;
    startingPacket << username + " connected.";
 
-   if (socket.send(startingPacket) != sf::Socket::Status::Done)
-   {
+   if (socket.send(startingPacket) != sf::Socket::Status::Done) {
       socket.disconnect();
-      throw std::runtime_error("Could not send data!");
+      printf("Could not send data!\n");
+      exit(EXIT_FAILURE);
    }
 
-   std::thread send(send_messages, std::ref(socket), username);
-   std::thread receive(receive_messages, std::ref(socket));
+   std::atomic<bool> quit;
+   std::mutex mutex;
+   std::thread send(send_messages, std::ref(socket), username, std::ref(quit), std::ref(mutex));
+   std::thread receive(receive_messages, std::ref(socket), std::ref(quit), std::ref(mutex));
 
-   if (send.joinable())
+   if (send.joinable()) {
       send.join();
+   }
 
-   if (receive.joinable())
+   if (receive.joinable()) {
       receive.join();
+   }
 
    sf::Packet disconnectPacket;
    disconnectPacket << username + " disconnected.";
    socket.send(disconnectPacket);
 
-   std::cout << "Disconnected." << std::endl;
+   printf("Disconnected.\n");
    socket.disconnect();
-}
-
-void send_messages(sf::TcpSocket& socket, const std::string& username)
-{
-   while (true)
-   {
-      std::cout << "Input your message ('exit' to exit): ";
-
-      std::string message;
-      std::getline(std::cin >> std::ws, message);
-      clear_line();
-
-      if (message == "exit")
-      {
-         quit = true;
-         std::cout << "Exiting..." << std::endl;
-         return;
-      }
-
-      std::string full_message = username + ": " + message;
-      std::cout << full_message << std::endl;
-
-      sf::Packet packet;
-      packet << full_message;
-
-      std::lock_guard<std::mutex> lock (mutex);
-
-      if (socket.send(packet) != sf::Socket::Status::Done)
-      {
-         socket.disconnect();
-         throw std::runtime_error("Could not send data!");
-      }
-   }
-}
-
-void receive_messages(sf::TcpSocket& socket)
-{
-   while (true)
-   {
-      if (quit)
-         return;
-
-      sf::Packet received;
-
-      std::lock_guard<std::mutex> lock (mutex);
-
-      if (socket.receive(received) == sf::Socket::Status::Done)
-      {
-         std::string message;
-         received >> message;
-
-         clear_line(0);
-         std::cout << message << std::endl;
-         std::cout << "Input your message ('exit' to exit): " << std::flush;
-      }
-   }
 }

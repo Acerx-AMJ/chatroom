@@ -68,8 +68,9 @@ int main() {
          }
       }
    }
-   printf("Server disconnected.\n");
 
-   for (auto& socket : clients)
+   printf("Server disconnected.\n");
+   for (auto& socket : clients) {
       socket->disconnect();
+   }
 }
